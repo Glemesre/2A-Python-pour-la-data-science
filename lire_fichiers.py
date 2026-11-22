@@ -43,7 +43,7 @@ FICHIERS = ['decp-2019.parquet',
             'decp-2026-10.parquet',
             'decp-2026-11.parquet',
             'decp-2026.parquet',
-            'decp-global.parquet',
+            'decp-global.parquet'
             ]
 
 
