@@ -3,9 +3,7 @@ from urllib.parse import quote
 import pandas as pd
 
 BASE_URL = "https://minio.lab.sspcloud.fr/k1000ensae/diffusion/projet-2a/data"
-FICHIERS = ['decp-2019.parquet',
-            'decp-2022.parquet',
-            'decp-2024-01.parquet',
+FICHIERS = ['decp-2024-01.parquet',
             'decp-2024-02.parquet',
             'decp-2024-03.parquet',
             'decp-2024-04.parquet',
