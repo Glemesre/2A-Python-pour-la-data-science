@@ -70,3 +70,4 @@ def charger_donnees():
         df_brut = pd.read_parquet(f"{BASE_URL}/{quote(nom)}")
         donnees[nom] = _mettre_a_plat(df_brut)
     return donnees
+
