@@ -1,10 +1,7 @@
-import fsspec
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
-import numpy as np
 import pandas as pd
 import plotly.express as px
-import pyarrow.parquet as pq
 import requests
 import seaborn as sns
 
@@ -13,12 +10,6 @@ def plot_montant_par_naf(df_final: pd.DataFrame) -> None:
     """
     Affiche un graphique en barres horizontales du montant total attribué (en M€)
     par section NAF de l'établissement titulaire.
-
-    Paramètres
-    ----------
-    df_final : pd.DataFrame
-        Table fusionnée (marchés DECP x Sirene) contenant les colonnes
-        'naf_code', 'naf_section', 'montant_part' et 'id'.
     """
     # Sous-ensemble des lignes valides appariées dans Sirene avec montant positif
     df_apparies = df_final[
@@ -79,12 +70,6 @@ def plot_boxplot_montant_an(df_final: pd.DataFrame) -> None:
     Affiche la distribution des montants annualisés (en échelle logarithmique)
     sous forme de boîtes à moustaches (boxplots) pour les 10 sections NAF
     les plus fréquentes en nombre de contrats.
-
-    Paramètres
-    ----------
-    df_final : pd.DataFrame
-        Table fusionnée (marchés DECP x Sirene) contenant les colonnes
-        'naf_code', 'naf_section', 'montant_part' et 'montant_annualise'.
     """
     # Sous-ensemble des lignes valides appariées dans Sirene avec montant positif
     df_apparies = df_final[
@@ -110,7 +95,7 @@ def plot_boxplot_montant_an(df_final: pd.DataFrame) -> None:
         order=top_10_sections,
         palette="crest",
         legend=False,
-        showfliers=False,  # Masque les valeurs extrêmes pour garder les boîtes interquartiles lisibles
+        showfliers=False,  # Masque les valeurs extrêmes pour garder les interquartiles lisibles
     )
 
     plt.xscale("log")
@@ -126,13 +111,6 @@ def plot_siege_procedure(df_final: pd.DataFrame) -> None:
     """
     Affiche la répartition en volume financier (%) entre agences secondaires (False)
     et sièges sociaux (True) selon le type de procédure de marché public.
-
-    Paramètres
-    ----------
-    df_final : pd.DataFrame
-        Table fusionnée (marchés DECP x Sirene) contenant les colonnes
-        'naf_code', 'naf_section', 'montant_part', 'procedure',
-        'etablissementSiege' et 'trancheEffectifsEtablissement'.
     """
     # Sous-ensemble des lignes valides appariées dans Sirene avec montant positif
     df_apparies = df_final[
@@ -203,16 +181,8 @@ def plot_carte_montants(
     ),
 ) -> None:
     """
-    Affiche une carte choroplèthe interactive des montants attribués (en M€)
+    Affiche une carte des montants attribués (en M€)
     et du nombre de marchés par département d'implantation de l'établissement titulaire.
-
-    Paramètres
-    ----------
-    df_final : pd.DataFrame
-        Table fusionnée (marchés DECP x Sirene) contenant les colonnes
-        'naf_code', 'naf_section', 'montant_part', 'dep_titulaire' et 'id'.
-    geojson_url : str, optionnel
-        URL vers le contour GeoJSON des départements français.
     """
     # Sous-ensemble des lignes valides appariées dans Sirene avec montant positif
     df_apparies = df_final[
@@ -259,16 +229,9 @@ def plot_carte_montants(
 
 def plot_montants_taille(df_final: pd.DataFrame) -> None:
     """
-    Affiche deux graphiques côte à côte selon la taille de l'établissement (tranches d'effectifs Insee) :
+    Affiche deux graphiques côte à côte selon la taille de l'établissement (tranches d'effectifs) :
     1. Le volume total cumulé capté (en M€ et en % du total).
-    2. La distribution des montants unitaires par marché (échelle logarithmique, hors valeurs extrêmes).
-
-    Paramètres
-    ----------
-    df_final : pd.DataFrame
-        Table fusionnée (marchés DECP x Sirene) contenant les colonnes
-        'trancheEffectifsEtablissement', 'montant_part', 'id' ainsi qu'une
-        colonne témoin de l'appariement Sirene ('naf_code' ou 'siren_sirene').
+    2. La distribution des montants unitaires par marché (échelle log, hors valeurs extrêmes).
     """
     # 1. Table de correspondance des codes Insee de tranches d'effectifs salariés
     # Note : trancheEffectifsEtablissement mesure l'effectif de l'établissement (proxy de la taille)
@@ -390,13 +353,6 @@ def plot_montant_procedure(df_final: pd.DataFrame) -> None:
     """
     Affiche un graphique en barres horizontales du montant total attribué (en M€),
     de la part en volume (%) et du nombre de marchés par type de procédure de passation.
-
-    Paramètres
-    ----------
-    df_final : pd.DataFrame
-        Table fusionnée (marchés DECP x Sirene) contenant les colonnes
-        'procedure', 'montant_part', 'id' ainsi qu'une colonne témoin
-        de l'appariement Sirene ('siren_sirene' ou 'naf_code').
     """
     # 1. Préparer le sous-ensemble valide apparié dans Sirene avec procédure renseignée
     col_temoin = "siren_sirene" if "siren_sirene" in df_final.columns else "naf_code"
@@ -467,17 +423,10 @@ def plot_montant_procedure(df_final: pd.DataFrame) -> None:
 
 def plot_procedure_taille_etablissement(df_final: pd.DataFrame) -> None:
     """
-    Affiche côte à côte deux graphiques en barres horizontales empilées (100 %)
+    Affiche deux graphiques en barres horizontales empilées (100 %)
     croisant le type de procédure de passation et la taille de l'établissement :
     - Panneau A : Répartition en nombre de marchés (%).
     - Panneau B : Répartition en volume financier (% des euros attribués).
-
-    Paramètres
-    ----------
-    df_final : pd.DataFrame
-        Table fusionnée (marchés DECP x Sirene) contenant les colonnes
-        'procedure', 'trancheEffectifsEtablissement', 'montant_part' ainsi qu'une
-        colonne témoin de l'appariement Sirene ('siren_sirene' ou 'naf_code').
     """
     size_mapping = {
         "NN": "Non renseigné / 0 salarié",

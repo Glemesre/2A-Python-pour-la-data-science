@@ -1,8 +1,9 @@
-import pandas as pd
-import fsspec
-import pyarrow.parquet as pq
-import numpy as np
 import gc
+
+import fsspec
+import numpy as np
+import pandas as pd
+import pyarrow.parquet as pq
 
 # Paramètres méthodologiques de filtrage des DECP
 ANNEE_MIN = 2024          # Fenêtre d'étude retenue (écarte les anciens contrats mis à jour tardivement)
@@ -16,17 +17,9 @@ def analyser_valeurs_manquantes_decp(
     """
     Calcule le bilan global des valeurs manquantes (NaN) sur l'ensemble
     des tables contenues dans le dictionnaire donnees_decp.
-
-    Paramètres
-    ----------
-    donnees_decp : dict[str, pd.DataFrame]
-        Dictionnaire associant chaque nom de fichier/année DECP à son DataFrame.
-
-    Renvoie
-    --------
-    tuple[pd.DataFrame, list[str]]
-        - bilan_nan : DataFrame trié par nombre décroissant de valeurs manquantes.
-        - colonnes_vides : Liste des colonnes entièrement vides (100 % de NaN).
+    Renvoie:
+    - bilan_nan : DataFrame trié par nombre décroissant de valeurs manquantes.
+    - colonnes_vides : Liste des colonnes entièrement vides (100 % de NaN).
     """
     total_lignes = sum(len(table) for table in donnees_decp.values())
     valeurs_valides = pd.concat(
@@ -43,7 +36,7 @@ def analyser_valeurs_manquantes_decp(
     print(f"Colonnes 100 % vides dans les DECP ({len(colonnes_vides)}) : {colonnes_vides}")
 
     return bilan_nan, colonnes_vides
-    
+
 
 def inspecter_parquet(url: str, nom_source: str, n_lignes: int = 5) -> pd.DataFrame:
     """Lit uniquement les métadonnées et un premier lot de lignes d'un fichier Parquet
@@ -222,15 +215,7 @@ def charger_et_preparer_sirene(
     Charge les colonnes utiles de la base Sirene Établissements depuis un fichier Parquet,
     normalise les clés SIRET, crée les variables sectorielles (NAF) et géographiques,
     calcule le référentiel économique national des établissements actifs et libère la RAM.
-
-    Paramètres
-    ----------
-    url_sirene_etab : str
-        URL ou chemin vers le fichier Parquet stock-stocketablissement.
-
-    Retourne
-    --------
-    tuple[pd.DataFrame, pd.DataFrame]
+    Renvoie:
         - df_sirene : Table Sirene nettoyée et dédoublonnée au niveau SIRET (14 chiffres).
         - ref_secteurs_sirene : Référentiel national des établissements/entreprises actifs par section NAF.
     """
@@ -302,25 +287,9 @@ def joindre_decp_et_sirene(
     Réalise la jointure à gauche (many-to-one) entre les marchés publics DECP et
     la base Sirene Établissements, affiche le diagnostic de couverture, sauvegarde
     les tables nettoyées au format Parquet et calcule le tableau de synthèse sectorielle.
-
-    Paramètres
-    ----------
-    df_decp : pd.DataFrame
-        Table des marchés publics nettoyée (niveau contrat x titulaire).
-    df_sirene : pd.DataFrame
-        Table Sirene Établissements nettoyée et dédoublonnée par SIRET.
-    ref_secteurs_sirene : pd.DataFrame
-        Référentiel national des établissements actifs par section NAF.
-    chemin_export_final : str | None, par défaut "decp_sirene_clean.parquet"
-        Chemin de sauvegarde Parquet de df_final (mettre None pour désactiver l'export).
-    chemin_export_ref : str | None, par défaut "ref_secteurs_sirene.parquet"
-        Chemin de sauvegarde Parquet de ref_secteurs_sirene (mettre None pour désactiver).
-
-    Retourne
-    --------
-    tuple[pd.DataFrame, pd.DataFrame]
-        - df_final : Table fusionnée (marché x titulaire enrichi Sirene).
-        - synthese : Tableau comparant le poids financier DECP et le poids économique Sirene par section NAF.
+    Renvoie:
+    - df_final : Table fusionnée (marché x titulaire enrichi Sirene).
+    - synthese : Tableau comparant le poids financier DECP et le poids économique Sirene par section NAF.
     """
     # `how="left"` conserve tous les marchés publics ;
     # `validate="many_to_one"` garantit mathématiquement l'absence de duplication de montants.
@@ -383,19 +352,6 @@ def construire_base_entreprises_inpi(
     charge les ratios financiers INPI/BCE filtrés sur ces entreprises, conserve
     le bilan le plus récent (en priorisant les bilans complets/consolidés) et
     réalise une jointure 1-pour-1.
-
-    Paramètres
-    ----------
-    df_final : pd.DataFrame
-        Table fusionnée (marchés DECP x Sirene) au niveau contrat x établissement.
-    url_inpi : str, optionnel
-        URL ou chemin vers le fichier Parquet des ratios INPI/BCE.
-
-    Retourne
-    --------
-    pd.DataFrame
-        Table consolidée au niveau SIREN (1 ligne par entreprise titulaire)
-        enrichie des derniers ratios financiers INPI disponibles.
     """
     # ==============================================================================
     # ÉTAPE 1 : Agréger df_final à 1 ligne par SIREN (niveau entreprise à 9 chiffres)
@@ -497,18 +453,6 @@ def diagnostiquer_appariement_inpi(
     1. Taux de valeurs manquantes (NaN) et types par colonne dans df_entreprise.
     2. Vérification du format brut de la colonne 'siren' dans le fichier Parquet INPI.
     3. Répartition des statuts de confidentialité des comptes parmi les entreprises appariées.
-
-    Paramètres
-    ----------
-    df_entreprise : pd.DataFrame
-        Table consolidée au niveau SIREN issue de construire_base_entreprises_inpi.
-    url_inpi : str, optionnel
-        URL ou chemin vers le fichier Parquet des ratios INPI/BCE.
-
-    Retourne
-    --------
-    pd.DataFrame
-        Tableau récapitulatif des valeurs présentes, valeurs manquantes et types par colonne.
     """
     # 1. Tableau récapitulatif des valeurs manquantes (NaN) par colonne dans df_entreprise
     nan_summary = pd.DataFrame({

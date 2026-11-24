@@ -1,9 +1,8 @@
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 import seaborn as sns
-import plotly.express as px
+
 
 def plot_dependance_ca(df_entreprise: pd.DataFrame) -> None:
     """
@@ -28,7 +27,7 @@ def plot_dependance_ca(df_entreprise: pd.DataFrame) -> None:
         df_plot["montant_annualise_total"] / df_plot["chiffre_d_affaires"] * 100
     )
 
-    # Regrouper les sections NAF les plus fréquentes pour garder une légende lisible (Top 6 + Autres)
+    # Regrouper les sections NAF les plus fréquentes pour garder une légende lisible
     top_naf = df_plot["naf_section_principale"].value_counts().nlargest(6).index
     df_plot["secteur_affiche"] = np.where(
         df_plot["naf_section_principale"].isin(top_naf),
