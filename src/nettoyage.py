@@ -289,3 +289,248 @@ def charger_et_preparer_sirene(
     print(f"Sirene nettoyé : {len(df_sirene):,} établissements uniques prêts pour la jointure")
 
     return df_sirene, ref_secteurs_sirene
+
+
+def joindre_decp_et_sirene(
+    df_decp: pd.DataFrame,
+    df_sirene: pd.DataFrame,
+    ref_secteurs_sirene: pd.DataFrame,
+    chemin_export_final: str | None = "decp_sirene_clean.parquet",
+    chemin_export_ref: str | None = "ref_secteurs_sirene.parquet",
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Réalise la jointure à gauche (many-to-one) entre les marchés publics DECP et
+    la base Sirene Établissements, affiche le diagnostic de couverture, sauvegarde
+    les tables nettoyées au format Parquet et calcule le tableau de synthèse sectorielle.
+
+    Paramètres
+    ----------
+    df_decp : pd.DataFrame
+        Table des marchés publics nettoyée (niveau contrat x titulaire).
+    df_sirene : pd.DataFrame
+        Table Sirene Établissements nettoyée et dédoublonnée par SIRET.
+    ref_secteurs_sirene : pd.DataFrame
+        Référentiel national des établissements actifs par section NAF.
+    chemin_export_final : str | None, par défaut "decp_sirene_clean.parquet"
+        Chemin de sauvegarde Parquet de df_final (mettre None pour désactiver l'export).
+    chemin_export_ref : str | None, par défaut "ref_secteurs_sirene.parquet"
+        Chemin de sauvegarde Parquet de ref_secteurs_sirene (mettre None pour désactiver).
+
+    Retourne
+    --------
+    tuple[pd.DataFrame, pd.DataFrame]
+        - df_final : Table fusionnée (marché x titulaire enrichi Sirene).
+        - synthese : Tableau comparant le poids financier DECP et le poids économique Sirene par section NAF.
+    """
+    # `how="left"` conserve tous les marchés publics ;
+    # `validate="many_to_one"` garantit mathématiquement l'absence de duplication de montants.
+    df_final = pd.merge(
+        df_decp,
+        df_sirene,
+        on="siret",
+        how="left",
+        validate="many_to_one",
+    )
+
+    # Libération immédiate des références locales avant le passage du ramasse-miettes
+    del df_decp, df_sirene
+    gc.collect()
+
+    # Diagnostic de couverture de la jointure
+    taux_lignes = df_final["naf_code"].notna().mean()
+    montant_tot = df_final["montant_part"].sum()
+    montant_ok = df_final.loc[df_final["naf_code"].notna(), "montant_part"].sum()
+
+    print(f"Table finale (marché x titulaire)      : {len(df_final):,} lignes, {df_final.shape[1]} colonnes")
+    print(f"Taux d'appariement Sirene (en lignes)  : {taux_lignes:.1%}")
+    print(f"Taux d'appariement Sirene (en montant) : {montant_ok / montant_tot:.1%}")
+
+    # Sauvegarde au format Parquet pour accélérer les sessions suivantes sans recharger Sirene
+    if chemin_export_final:
+        df_final.to_parquet(chemin_export_final, index=False)
+    if chemin_export_ref:
+        ref_secteurs_sirene.to_parquet(chemin_export_ref, index=False)
+
+    # Tableau de synthèse : poids financier dans les DECP vs poids économique dans Sirene
+    synthese = (
+        df_final.groupby("naf_section", as_index=False)
+        .agg(
+            nb_contrats=("siret", "count"),
+            nb_entreprises=("siren", "nunique"),
+            montant_total_M=("montant_part", lambda s: s.sum() / 1e6),
+            montant_median=("montant_part", "median"),
+        )
+        .merge(ref_secteurs_sirene, on="naf_section", how="left")
+    )
+
+    synthese["part_montant_decp"] = (
+        synthese["montant_total_M"] / synthese["montant_total_M"].sum()
+    )
+    # Indice > 1 : le secteur capte davantage de dépense publique que son poids économique
+    synthese["indice_surrepresentation"] = (
+        synthese["part_montant_decp"] / synthese["part_etablissements_sirene"]
+    )
+
+    return df_final, synthese
+
+
+def construire_base_entreprises_inpi(
+    df_final: pd.DataFrame,
+    url_inpi: str = "https://minio.lab.sspcloud.fr/glemesre/diffusion/ratios_inpi_bce(1).parquet",
+) -> pd.DataFrame:
+    """
+    Agrège la table des marchés publics au niveau entreprise (SIREN à 9 chiffres),
+    charge les ratios financiers INPI/BCE filtrés sur ces entreprises, conserve
+    le bilan le plus récent (en priorisant les bilans complets/consolidés) et
+    réalise une jointure 1-pour-1.
+
+    Paramètres
+    ----------
+    df_final : pd.DataFrame
+        Table fusionnée (marchés DECP x Sirene) au niveau contrat x établissement.
+    url_inpi : str, optionnel
+        URL ou chemin vers le fichier Parquet des ratios INPI/BCE.
+
+    Retourne
+    --------
+    pd.DataFrame
+        Table consolidée au niveau SIREN (1 ligne par entreprise titulaire)
+        enrichie des derniers ratios financiers INPI disponibles.
+    """
+    # ==============================================================================
+    # ÉTAPE 1 : Agréger df_final à 1 ligne par SIREN (niveau entreprise à 9 chiffres)
+    # ==============================================================================
+    df_work = df_final[df_final["siret"].notna()].copy()
+
+    # Extraire le SIREN à 9 chiffres en tronquant le numéro SIRET
+    df_work["siren"] = df_work["siret"].astype(str).str.strip().str.zfill(14).str[:9]
+
+    # Fonction auxiliaire pour récupérer la modalité la plus fréquente (mode) par SIREN
+    def first_mode(series: pd.Series):
+        m = series.dropna().mode()
+        return m.iloc[0] if not m.empty else None
+
+    # Construction dynamique du dictionnaire d'agrégation
+    agg_dict = {
+        "nb_marches": ("id", "nunique"),
+        "nb_etablissements_gagnants": ("siret", "nunique"),
+        "montant_total": ("montant_part", "sum"),
+        "montant_moyen": ("montant_part", "mean"),
+        "montant_median": ("montant_part", "median"),
+        "montant_annualise_total": ("montant_annualise", "sum"),
+        "naf_section_principale": ("naf_section", first_mode),
+        "naf_division_principale": ("naf_division", first_mode),
+        "tranche_effectifs_max": ("trancheEffectifsEtablissement", "max"),
+        "dep_principal": ("dep_titulaire", first_mode),
+        "a_gagne_via_siege": ("etablissementSiege", "any"),
+    }
+
+    # Ajoute le nom de l'entreprise uniquement si une colonne de nom existe dans df_final
+    for col_nom in ["titulaire_nom", "denominationUniteLegale", "nom"]:
+        if col_nom in df_work.columns:
+            agg_dict["entreprise_nom"] = (col_nom, "first")
+            break
+
+    df_siren_decp = df_work.groupby("siren", as_index=False).agg(**agg_dict)
+
+    # ==============================================================================
+    # ÉTAPE 2 : Charger (avec filtre) et dédoublonner les ratios INPI/BCE par SIREN
+    # ==============================================================================
+    # Récupérer la liste des SIREN uniques présents dans la base DECP
+    sirens_decp = df_siren_decp["siren"].dropna().unique().tolist()
+
+    # Charger uniquement les lignes correspondant à vos entreprises DECP
+    df_inpi = pd.read_parquet(
+        url_inpi,
+        filters=[("siren", "in", sirens_decp)],
+    )
+
+    # Normaliser le format de la colonne 'siren' sur 9 caractères
+    df_inpi["siren"] = df_inpi["siren"].astype(str).str.strip().str.zfill(9)
+
+    # Convertir 'date_cloture_exercice' au format datetime pour trier chronologiquement
+    df_inpi["date_cloture_exercice"] = pd.to_datetime(
+        df_inpi["date_cloture_exercice"], errors="coerce"
+    )
+
+    # Trier pour garder par SIREN :
+    # 1. L'exercice le plus récent ('date_cloture_exercice' décroissant)
+    # 2. En cas de doublon sur la même date, privilégier les bilans complets ('C') ou consolidés ('K') avant simplifiés ('S')
+    df_inpi_latest = (
+        df_inpi.sort_values(
+            by=["siren", "date_cloture_exercice", "type_bilan"],
+            ascending=[True, False, True],
+        )
+        .drop_duplicates(subset=["siren"], keep="first")
+    )
+
+    # ==============================================================================
+    # ÉTAPE 3 : Jointure à gauche (1-pour-1) et diagnostic du taux d'appariement
+    # ==============================================================================
+    df_entreprise = pd.merge(
+        df_siren_decp,
+        df_inpi_latest,
+        on="siren",
+        how="left",
+        validate="one_to_one",  # Garantit l'absence de multiplication accidentelle des lignes
+    )
+
+    # Affichage de contrôle
+    n_total = len(df_entreprise)
+    n_inpi_present = df_entreprise["date_cloture_exercice"].notna().sum()
+    n_ca_disponible = df_entreprise["chiffre_d_affaires"].notna().sum()
+
+    print(f"Entreprises uniques (SIREN) dans DECP : {n_total:,}")
+    print(f"Entreprises présentes dans la base INPI : {n_inpi_present:,} ({n_inpi_present / n_total:.1%})")
+    print(f"Entreprises avec chiffre d'affaires non confidentiel : {n_ca_disponible:,} ({n_ca_disponible / n_total:.1%})")
+
+    return df_entreprise
+
+
+def diagnostiquer_appariement_inpi(
+    df_entreprise: pd.DataFrame,
+    url_inpi: str = "https://minio.lab.sspcloud.fr/glemesre/diffusion/ratios_inpi_bce(1).parquet",
+) -> pd.DataFrame:
+    """
+    Affiche un diagnostic complet de la qualité de l'appariement entre df_entreprise
+    et la base INPI/BCE :
+    1. Taux de valeurs manquantes (NaN) et types par colonne dans df_entreprise.
+    2. Vérification du format brut de la colonne 'siren' dans le fichier Parquet INPI.
+    3. Répartition des statuts de confidentialité des comptes parmi les entreprises appariées.
+
+    Paramètres
+    ----------
+    df_entreprise : pd.DataFrame
+        Table consolidée au niveau SIREN issue de construire_base_entreprises_inpi.
+    url_inpi : str, optionnel
+        URL ou chemin vers le fichier Parquet des ratios INPI/BCE.
+
+    Retourne
+    --------
+    pd.DataFrame
+        Tableau récapitulatif des valeurs présentes, valeurs manquantes et types par colonne.
+    """
+    # 1. Tableau récapitulatif des valeurs manquantes (NaN) par colonne dans df_entreprise
+    nan_summary = pd.DataFrame({
+        "nb_valeurs_presentes": df_entreprise.notna().sum(),
+        "nb_NaN": df_entreprise.isna().sum(),
+        "taux_NaN_pct": (df_entreprise.isna().mean() * 100).round(1),
+        "type_colonne": df_entreprise.dtypes,
+    })
+    print("=== DIAGNOSTIC DES VALEURS MANQUANTES (df_entreprise) ===")
+    print(nan_summary.to_string())
+
+    # 2. Vérifier le type et le format brut de 'siren' dans le fichier Parquet INPI
+    sample_inpi = pd.read_parquet(url_inpi, columns=["siren", "confidentiality"]).head(10)
+    print("\n=== APERÇU DU FORMAT BRUT DANS URL_INPI ===")
+    print("Type de la colonne siren :", sample_inpi["siren"].dtype)
+    print(sample_inpi)
+
+    # 3. Répartition de la confidentialité parmi les entreprises appariées
+    if "confidentiality" in df_entreprise.columns:
+        print("\n=== STATUT DE CONFIDENTIALITÉ DES COMPTES (ENTREPRISES APPARIÉES) ===")
+        print(df_entreprise["confidentiality"].value_counts(dropna=False))
+
+    return nan_summary
+
+
